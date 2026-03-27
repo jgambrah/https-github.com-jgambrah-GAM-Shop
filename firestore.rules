@@ -1,0 +1,273 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: businessUnits
+    // Fields: id, name, tin, location, ownerUid, createdAt, trialEndsAt, subscriptionStatus, vatRate
+    //
+    // Collection: users
+    // Fields: uid, email, displayName, photoURL, role, businessUnitId, branchId, createdAt
+    //
+    // Collection: productTemplates
+    // Fields: id, businessUnitId, name, sku, barcode, brand, category, costPrice, sellingPrice, createdAt
+    //
+    // Collection: products
+    // Fields: id, businessUnitId, templateId, name, sku, barcode, price, stockLevel, branchId, updatedAt
+    //
+    // Collection: sales
+    // Fields: id, businessUnitId, items, total, tax, paymentMethod, clerkId, clerkName, branchId, shiftId, timestamp, status
+    //
+    // Collection: shifts
+    // Fields: id, businessUnitId, userId, userName, startTime, openingCash, status, branchId
+    //
+    // Collection: categories
+    // Fields: id, businessUnitId, name
+    //
+    // Collection: branches
+    // Fields: id, businessUnitId, name, location, type
+    //
+    // Collection: stockTransfers
+    // Fields: id, businessUnitId, sourceBranchId, destinationBranchId, productId, templateId, productName, quantity, status, initiatedBy, initiatedAt
+    // Collection: counters
+    // Fields: count, date
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        ((request.auth.token.email == "jamesgambrah@gmail.com" && request.auth.token.email_verified == true) ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+    }
+
+    function isSameBusinessUnit(businessUnitId) {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessUnitId == businessUnitId;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasRequiredFields(['uid', 'email', 'displayName', 'role', 'businessUnitId', 'branchId', 'createdAt']) &&
+             data.uid is string && data.uid.size() > 0 &&
+             data.email is string && isValidEmail(data.email) &&
+             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 100 &&
+             data.role is string && data.role in ['manager', 'supervisor', 'clerk', 'inventory', 'accountant', 'security', 'warehouse', 'service', 'admin'] &&
+             data.businessUnitId is string &&
+             data.branchId is string &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidBusinessUnit(data) {
+      return hasRequiredFields(['id', 'name', 'ownerUid', 'createdAt', 'subscriptionStatus']) &&
+             data.id is string &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.ownerUid is string &&
+             isValidDateString(data.createdAt) &&
+             data.subscriptionStatus in ['trialing', 'active', 'expired'] &&
+             (!('vatRate' in data) || (data.vatRate is number && data.vatRate >= 0 && data.vatRate <= 100));
+    }
+
+    function isValidProduct(data) {
+      return hasRequiredFields(['id', 'businessUnitId', 'templateId', 'name', 'sku', 'price', 'stockLevel', 'branchId', 'updatedAt']) &&
+             data.price is number && data.price >= 0 &&
+             data.stockLevel is number &&
+             isValidDateString(data.updatedAt);
+    }
+
+    function isValidSale(data) {
+      return hasRequiredFields(['id', 'businessUnitId', 'items', 'total', 'tax', 'paymentMethod', 'clerkId', 'clerkName', 'branchId', 'shiftId', 'timestamp', 'status']) &&
+             data.total is number && data.total >= 0 &&
+             data.tax is number && data.tax >= 0 &&
+             data.paymentMethod in ['cash', 'card', 'momo', 'credit'] &&
+             data.status in ['completed', 'refunded'] &&
+             isValidDateString(data.timestamp);
+    }
+
+    function isValidShift(data) {
+      return hasRequiredFields(['displayId', 'businessUnitId', 'userId', 'userName', 'startTime', 'openingCash', 'status', 'branchId']) &&
+             data.openingCash is number && data.openingCash >= 0 &&
+             (data.status == 'open' || (hasRequiredFields(['endTime', 'closingCash', 'expectedCash']) && data.closingCash is number && data.closingCash >= 0 && data.expectedCash is number && data.expectedCash >= 0)) &&
+             isValidDateString(data.startTime);
+    }
+
+    function isValidCustomer(data) {
+      return hasRequiredFields(['id', 'businessUnitId', 'name', 'phone', 'creditLimit', 'currentBalance', 'createdAt', 'updatedAt']) &&
+             data.id is string &&
+             data.businessUnitId is string &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.phone is string && data.phone.size() > 0 &&
+             data.creditLimit is number && data.creditLimit >= 0 &&
+             data.currentBalance is number &&
+             isValidDateString(data.createdAt) &&
+             isValidDateString(data.updatedAt);
+    }
+
+    function isValidCustomerLedgerEntry(data) {
+      return hasRequiredFields(['id', 'customerId', 'businessUnitId', 'type', 'amount', 'balanceAfter', 'timestamp', 'clerkId']) &&
+             data.id is string &&
+             data.customerId is string &&
+             data.businessUnitId is string &&
+             data.type in ['sale', 'payment', 'refund'] &&
+             data.amount is number && data.amount >= 0 &&
+             data.balanceAfter is number &&
+             isValidDateString(data.timestamp) &&
+             data.clerkId is string;
+    }
+
+    function isValidProductTemplate(data) {
+      return hasRequiredFields(['id', 'businessUnitId', 'name', 'sku', 'costPrice', 'sellingPrice', 'createdAt']) &&
+             data.costPrice is number && data.costPrice >= 0 &&
+             data.sellingPrice is number && data.sellingPrice >= 0 &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidCounter(data) {
+      return hasRequiredFields(['count', 'date']) &&
+             data.count is number && data.count >= 0 &&
+             data.date is string;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    function isValidStockTransfer(data) {
+      return hasRequiredFields(['id', 'businessUnitId', 'sourceBranchId', 'destinationBranchId', 'productId', 'templateId', 'productName', 'quantity', 'status', 'initiatedBy', 'initiatedAt']) &&
+             data.quantity is number && data.quantity > 0 &&
+             data.status in ['pending', 'completed', 'cancelled'] &&
+             isValidDateString(data.initiatedAt);
+    }
+
+    match /counters/{counterId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /businessUnits/{unitId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /users/{userId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /productTemplates/{templateId} {
+      allow read: if isAuthenticated() && (isAdmin() || isSameBusinessUnit(resource.data.businessUnitId));
+      allow create: if isAuthenticated() && isValidProductTemplate(request.resource.data) && (isAdmin() || isSameBusinessUnit(request.resource.data.businessUnitId));
+      allow update: if isAuthenticated() && isValidProductTemplate(request.resource.data) && (isAdmin() || (isSameBusinessUnit(resource.data.businessUnitId) && isSameBusinessUnit(request.resource.data.businessUnitId)));
+      allow delete: if isAdmin();
+    }
+
+    match /products/{productId} {
+      allow read: if isAuthenticated() && (isAdmin() || isSameBusinessUnit(resource.data.businessUnitId));
+      allow create: if isAuthenticated() && isValidProduct(request.resource.data) && (isAdmin() || isSameBusinessUnit(request.resource.data.businessUnitId));
+      allow update: if isAuthenticated() && isValidProduct(request.resource.data) && (isAdmin() || (isSameBusinessUnit(resource.data.businessUnitId) && isSameBusinessUnit(request.resource.data.businessUnitId)));
+      allow delete: if isAdmin();
+    }
+
+    match /sales/{saleId} {
+      allow read: if isAuthenticated() && (isAdmin() || isSameBusinessUnit(resource.data.businessUnitId));
+      allow create: if isAuthenticated() && isValidSale(request.resource.data) && (isAdmin() || isSameBusinessUnit(request.resource.data.businessUnitId));
+      allow update: if isAuthenticated() && isValidSale(request.resource.data) && (isAdmin() || (isSameBusinessUnit(resource.data.businessUnitId) && isSameBusinessUnit(request.resource.data.businessUnitId)));
+      allow delete: if isAdmin();
+    }
+
+    match /shifts/{shiftId} {
+      allow read: if isAuthenticated() && (isAdmin() || isSameBusinessUnit(resource.data.businessUnitId));
+      allow create: if isAuthenticated() && isValidShift(request.resource.data) && (isAdmin() || isSameBusinessUnit(request.resource.data.businessUnitId));
+      allow update: if isAuthenticated() && isValidShift(request.resource.data) && (isAdmin() || (isSameBusinessUnit(resource.data.businessUnitId) && isSameBusinessUnit(request.resource.data.businessUnitId)));
+      allow delete: if isAdmin();
+    }
+
+    match /categories/{categoryId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /branches/{branchId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /stockTransfers/{transferId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        (resource != null && resource.data.businessUnitId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessUnitId)
+      );
+      allow create: if isAuthenticated() && isValidStockTransfer(request.resource.data) && (isAdmin() || isSameBusinessUnit(request.resource.data.businessUnitId));
+      allow update: if isAuthenticated() && isValidStockTransfer(request.resource.data) && (isAdmin() || (isSameBusinessUnit(resource.data.businessUnitId) && isSameBusinessUnit(request.resource.data.businessUnitId)));
+      allow delete: if isAdmin();
+    }
+
+    match /customers/{customerId} {
+      allow read: if isAuthenticated() && (isAdmin() || isSameBusinessUnit(resource.data.businessUnitId));
+      allow create: if isAuthenticated() && isValidCustomer(request.resource.data) && (isAdmin() || isSameBusinessUnit(request.resource.data.businessUnitId));
+      allow update: if isAuthenticated() && isValidCustomer(request.resource.data) && (isAdmin() || (isSameBusinessUnit(resource.data.businessUnitId) && isSameBusinessUnit(request.resource.data.businessUnitId)));
+      allow delete: if isAdmin();
+    }
+
+    match /customerLedger/{entryId} {
+      allow read: if isAuthenticated() && (isAdmin() || isSameBusinessUnit(resource.data.businessUnitId));
+      allow create: if isAuthenticated() && isValidCustomerLedgerEntry(request.resource.data) && (isAdmin() || isSameBusinessUnit(request.resource.data.businessUnitId));
+      allow update, delete: if isAdmin();
+    }
+
+    match /analytics_events/{eventId} {
+      allow read: if isAdmin();
+      allow create: if true; // Allow all to log events
+    }
+
+    match /pricingPlans/{planId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /demoRequests/{requestId} {
+      allow read: if isAdmin();
+      allow create: if true; // Public demo request form
+      allow update: if isAdmin();
+    }
+
+    match /subscription_payments/{paymentId} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.businessUnitId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessUnitId);
+      allow create: if isAuthenticated();
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

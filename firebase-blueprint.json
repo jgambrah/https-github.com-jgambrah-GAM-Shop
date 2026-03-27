@@ -1,0 +1,312 @@
+{
+  "entities": {
+    "BusinessUnit": {
+      "title": "BusinessUnit",
+      "description": "A business unit representing a store or company.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "tin": { "type": "string" },
+        "location": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "trialEndsAt": { "type": "string", "format": "date-time" },
+        "subscriptionStatus": { "type": "string", "enum": ["trialing", "active", "expired"] },
+        "selectedPlanId": { "type": "string" },
+        "paymentReference": { "type": "string" },
+        "vatRate": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "ownerUid", "createdAt", "subscriptionStatus"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile information.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string" },
+        "businessUnitId": { "type": "string" },
+        "branchId": { "type": "string" },
+        "ghanaCard": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "emergencyContact": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "role", "businessUnitId", "branchId", "createdAt"]
+    },
+    "ProductTemplate": {
+      "title": "ProductTemplate",
+      "description": "Master product definition.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessUnitId": { "type": "string" },
+        "name": { "type": "string" },
+        "sku": { "type": "string" },
+        "barcode": { "type": "string" },
+        "brand": { "type": "string" },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "unit": { "type": "string" },
+        "costPrice": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "businessUnitId", "name", "sku", "createdAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "A product instance in a specific branch.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessUnitId": { "type": "string" },
+        "templateId": { "type": "string" },
+        "name": { "type": "string" },
+        "sku": { "type": "string" },
+        "barcode": { "type": "string" },
+        "brand": { "type": "string" },
+        "category": { "type": "string" },
+        "unit": { "type": "string" },
+        "batchNumber": { "type": "string" },
+        "price": { "type": "number" },
+        "costPrice": { "type": "number" },
+        "stockLevel": { "type": "number" },
+        "reorderPoint": { "type": "number" },
+        "expiryDate": { "type": "string", "format": "date" },
+        "location": { "type": "string" },
+        "branchId": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "businessUnitId", "templateId", "name", "sku", "price", "stockLevel", "branchId", "updatedAt"]
+    },
+    "Sale": {
+      "title": "Sale",
+      "description": "A completed sale transaction.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessUnitId": { "type": "string" },
+        "items": { "type": "array" },
+        "total": { "type": "number" },
+        "tax": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["cash", "card", "momo", "credit"] },
+        "momoReference": { "type": "string" },
+        "clerkId": { "type": "string" },
+        "clerkName": { "type": "string" },
+        "branchId": { "type": "string" },
+        "shiftId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["completed", "refunded"] },
+        "refundedAt": { "type": "string", "format": "date-time" },
+        "refundedBy": { "type": "string" },
+        "refundReason": { "type": "string" }
+      },
+      "required": ["id", "businessUnitId", "items", "total", "tax", "paymentMethod", "clerkId", "clerkName", "branchId", "shiftId", "timestamp", "status"]
+    },
+    "Shift": {
+      "title": "Shift",
+      "description": "A cashier's work shift.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessUnitId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "startTime": { "type": "string", "format": "date-time" },
+        "endTime": { "type": "string", "format": "date-time" },
+        "openingCash": { "type": "number" },
+        "closingCash": { "type": "number" },
+        "expectedCash": { "type": "number" },
+        "status": { "type": "string", "enum": ["open", "submitted", "closed"] },
+        "branchId": { "type": "string" },
+        "reviewedBy": { "type": "string" },
+        "reviewedAt": { "type": "string", "format": "date-time" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "businessUnitId", "userId", "userName", "startTime", "openingCash", "status", "branchId"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Product category.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessUnitId": { "type": "string" },
+        "name": { "type": "string" }
+      },
+      "required": ["id", "businessUnitId", "name"]
+    },
+    "Branch": {
+      "title": "Branch",
+      "description": "A business branch (store or warehouse).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessUnitId": { "type": "string" },
+        "name": { "type": "string" },
+        "location": { "type": "string" },
+        "managerId": { "type": "string" },
+        "type": { "type": "string", "enum": ["store", "warehouse"] }
+      },
+      "required": ["id", "businessUnitId", "name", "location", "type"]
+    },
+    "StockTransfer": {
+      "title": "StockTransfer",
+      "description": "A transfer of stock between branches.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessUnitId": { "type": "string" },
+        "sourceBranchId": { "type": "string" },
+        "destinationBranchId": { "type": "string" },
+        "productId": { "type": "string" },
+        "templateId": { "type": "string" },
+        "productName": { "type": "string" },
+        "quantity": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "in-transit", "received", "cancelled"] },
+        "initiatedBy": { "type": "string" },
+        "initiatedAt": { "type": "string", "format": "date-time" },
+        "receivedBy": { "type": "string" },
+        "receivedAt": { "type": "string", "format": "date-time" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "businessUnitId", "sourceBranchId", "destinationBranchId", "productId", "templateId", "productName", "quantity", "status", "initiatedBy", "initiatedAt"]
+    },
+    "AnalyticsEvent": {
+      "title": "AnalyticsEvent",
+      "description": "A user action or system event for analytics.",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "clientTimestamp": { "type": "string", "format": "date-time" },
+        "userAgent": { "type": "string" },
+        "url": { "type": "string" },
+        "page": { "type": "string" },
+        "label": { "type": "string" },
+        "id": { "type": "string" },
+        "total": { "type": "number" },
+        "items": { "type": "number" },
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "productId": { "type": "string" },
+        "newStock": { "type": "number" },
+        "value": { "type": "number" },
+        "unit": { "type": "string" },
+        "message": { "type": "string" },
+        "stack": { "type": "string" }
+      },
+      "required": ["type", "userId", "timestamp"]
+    },
+    "PricingPlan": {
+      "title": "PricingPlan",
+      "description": "Subscription pricing plans.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "features": { "type": "array", "items": { "type": "string" } },
+        "isPopular": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "price", "features", "updatedAt"]
+    },
+    "DemoRequest": {
+      "title": "DemoRequest",
+      "description": "Requests for a demo or provisioning.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "companyName": { "type": "string" },
+        "contactName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "phone": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "provisioned", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "companyName", "contactName", "email", "phone", "status", "createdAt"]
+    },
+    "SubscriptionPayment": {
+      "title": "SubscriptionPayment",
+      "description": "Records of subscription payments.",
+      "type": "object",
+      "properties": {
+        "businessUnitId": { "type": "string" },
+        "planId": { "type": "string" },
+        "planName": { "type": "string" },
+        "amount": { "type": "number" },
+        "reference": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["businessUnitId", "planId", "planName", "amount", "reference", "timestamp"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "A customer who can buy on credit.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessUnitId": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "address": { "type": "string" },
+        "creditLimit": { "type": "number" },
+        "currentBalance": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "businessUnitId", "name", "phone", "creditLimit", "currentBalance", "createdAt", "updatedAt"]
+    },
+    "CustomerLedgerEntry": {
+      "title": "CustomerLedgerEntry",
+      "description": "A record of a customer's credit transaction.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "customerId": { "type": "string" },
+        "businessUnitId": { "type": "string" },
+        "type": { "type": "string", "enum": ["sale", "payment", "refund"] },
+        "amount": { "type": "number" },
+        "balanceAfter": { "type": "number" },
+        "referenceId": { "type": "string" },
+        "paymentMethod": { "type": "string", "enum": ["cash", "card", "momo"] },
+        "shiftId": { "type": "string" },
+        "note": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "clerkId": { "type": "string" }
+      },
+      "required": ["id", "customerId", "businessUnitId", "type", "amount", "balanceAfter", "timestamp", "clerkId"]
+    }
+  },
+  "firestore": {
+    "businessUnits": { "schema": "BusinessUnit", "description": "Business units." },
+    "users": { "schema": "User", "description": "User profiles." },
+    "productTemplates": { "schema": "ProductTemplate", "description": "Product templates." },
+    "products": { "schema": "Product", "description": "Branch-specific products." },
+    "sales": { "schema": "Sale", "description": "Sales transactions." },
+    "shifts": { "schema": "Shift", "description": "Work shifts." },
+    "categories": { "schema": "Category", "description": "Product categories." },
+    "branches": { "schema": "Branch", "description": "Business branches." },
+    "stockTransfers": { "schema": "StockTransfer", "description": "Stock transfers." },
+    "analytics_events": { "schema": "AnalyticsEvent", "description": "Analytics events tracking." },
+    "pricingPlans": { "schema": "PricingPlan", "description": "Subscription plans." },
+    "demoRequests": { "schema": "DemoRequest", "description": "Demo requests." },
+    "subscription_payments": { "schema": "SubscriptionPayment", "description": "Payment records." },
+    "customers": { "schema": "Customer", "description": "Credit customers." },
+    "customerLedger": { "schema": "CustomerLedgerEntry", "description": "Customer ledger entries." }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "GAM SHOP",
+  "description": "A multi-tenant SaaS Retail Shop Management System with shop isolation, MoMo integration, and GRA E-VAT compliance.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
