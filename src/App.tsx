@@ -2702,6 +2702,7 @@ const ProductCatalog = ({ templates, onAddTemplate, onUpdateTemplate, onDeleteTe
   const [search, setSearch] = useState('');
   const [isBundle, setIsBundle] = useState(false);
   const [bundleItems, setBundleItems] = useState<BundleItem[]>([]);
+  const [dealConfig, setDealConfig] = useState({ buy: 2, get: 1, templateId: '' });
   const [barcode, setBarcode] = useState('');
   const [imageUrl, setImageUrl] = useState('');
   const [isUploading, setIsUploading] = useState(false);
@@ -2776,6 +2777,33 @@ const ProductCatalog = ({ templates, onAddTemplate, onUpdateTemplate, onDeleteTe
 
   const removeBundleItem = (index: number) => {
     setBundleItems(bundleItems.filter((_, i) => i !== index));
+  };
+
+  const applyQuickDeal = () => {
+    if (!dealConfig.templateId) {
+      toast.error('Please select a product for the deal');
+      return;
+    }
+    const template = templates.find(t => t.id === dealConfig.templateId);
+    if (!template) return;
+
+    const totalQty = dealConfig.buy + dealConfig.get;
+    setBundleItems([{ templateId: dealConfig.templateId, quantity: totalQty }]);
+    
+    // Set suggested selling price: (Buy Qty * Unit Price)
+    const suggestedPrice = dealConfig.buy * (template.sellingPrice || 0);
+    const form = document.querySelector('form') as HTMLFormElement;
+    if (form) {
+      const nameInput = form.querySelector('input[name="name"]') as HTMLInputElement;
+      const sellingPriceInput = form.querySelector('input[name="sellingPrice"]') as HTMLInputElement;
+      const skuInput = form.querySelector('input[name="sku"]') as HTMLInputElement;
+      
+      if (nameInput) nameInput.value = `${template.name} Deal (${dealConfig.buy}+${dealConfig.get} Free)`;
+      if (sellingPriceInput) sellingPriceInput.value = suggestedPrice.toString();
+      if (skuInput) skuInput.value = `${template.sku}-DEAL-${Date.now().toString().slice(-4)}`;
+    }
+    
+    toast.success(`Applied ${dealConfig.buy}+${dealConfig.get} Free deal for ${template.name}`);
   };
 
   const updateBundleItem = (index: number, field: keyof BundleItem, value: any) => {
@@ -2992,7 +3020,59 @@ const ProductCatalog = ({ templates, onAddTemplate, onUpdateTemplate, onDeleteTe
                 </div>
 
                 {isBundle && (
-                  <div className="space-y-3 p-4 bg-blue-50 rounded-xl border border-blue-100">
+                  <div className="space-y-4">
+                    <div className="p-4 bg-orange-50 rounded-xl border border-orange-100 space-y-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Zap size={14} className="text-orange-500" />
+                        <h4 className="text-[10px] font-black text-orange-700 uppercase tracking-widest">Quick Bundle Deal (e.g. Buy 2 Get 1 Free)</h4>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="col-span-3 space-y-1">
+                          <label className="text-[10px] font-bold text-orange-600 uppercase">Product to Bundle</label>
+                          <select 
+                            value={dealConfig.templateId}
+                            onChange={e => setDealConfig(prev => ({ ...prev, templateId: e.target.value }))}
+                            className="w-full p-2 text-xs rounded-lg border border-orange-200 outline-none focus:border-orange-500 bg-white"
+                          >
+                            <option value="">Select Product</option>
+                            {templates.filter(t => !t.isBundle).map(t => (
+                              <option key={t.id} value={t.id}>{t.name} (GHC {t.sellingPrice})</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-orange-600 uppercase">Buy Qty</label>
+                          <input 
+                            type="number" 
+                            min="1"
+                            value={dealConfig.buy}
+                            onChange={e => setDealConfig(prev => ({ ...prev, buy: Number(e.target.value) }))}
+                            className="w-full p-2 text-xs rounded-lg border border-orange-200 outline-none focus:border-orange-500 bg-white"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-orange-600 uppercase">Get Free</label>
+                          <input 
+                            type="number" 
+                            min="1"
+                            value={dealConfig.get}
+                            onChange={e => setDealConfig(prev => ({ ...prev, get: Number(e.target.value) }))}
+                            className="w-full p-2 text-xs rounded-lg border border-orange-200 outline-none focus:border-orange-500 bg-white"
+                          />
+                        </div>
+                        <div className="flex items-end">
+                          <Button 
+                            type="button"
+                            onClick={applyQuickDeal}
+                            className="w-full h-9 bg-orange-500 hover:bg-orange-600 text-white text-[10px] font-bold rounded-lg"
+                          >
+                            Apply Deal
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 p-4 bg-blue-50 rounded-xl border border-blue-100">
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-black text-blue-700 uppercase tracking-widest">Bundle Constituents</h4>
                       <Button 
@@ -3048,7 +3128,8 @@ const ProductCatalog = ({ templates, onAddTemplate, onUpdateTemplate, onDeleteTe
                       ))}
                     </div>
                   </div>
-                )}
+                </div>
+              )}
 
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-500 uppercase">Product Name</label>
@@ -6971,7 +7052,11 @@ function App() {
     };
   }, [user, profile?.businessUnitId]);
 
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
   const handleLogin = async () => {
+    if (isLoggingIn) return;
+    setIsLoggingIn(true);
     try {
       const provider = new GoogleAuthProvider();
       
@@ -6984,9 +7069,13 @@ function App() {
       } else if (err.code === 'auth/cancelled-popup-request') {
         // User closed the popup, no need for a loud error
         console.log('User cancelled sign-in');
+      } else if (err.code === 'auth/unauthorized-domain') {
+        toast.error('This domain is not authorized for sign-in. Please add it to the Firebase console.');
       } else {
         toast.error(`Login failed: ${err.message || 'Unknown error'}`);
       }
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -7949,10 +8038,17 @@ function App() {
           <div className="bg-white/10 backdrop-blur-md p-8 rounded-3xl border border-white/20 shadow-2xl space-y-6">
             <Button 
               onClick={handleLogin}
+              disabled={isLoggingIn}
               className="w-full py-4 bg-white text-slate-900 hover:bg-slate-50 text-lg font-bold rounded-2xl flex items-center justify-center gap-3 shadow-xl"
             >
-              <img src="https://www.google.com/favicon.ico" className="w-6 h-6" alt="Google" />
-              Sign in with Google
+              {isLoggingIn ? (
+                <Loader2 className="animate-spin" size={24} />
+              ) : (
+                <>
+                  <img src="https://www.google.com/favicon.ico" className="w-6 h-6" alt="Google" />
+                  Sign in with Google
+                </>
+              )}
             </Button>
             <p className="text-center text-orange-100/60 text-sm">
               Secure multi-tenant access for your retail business
