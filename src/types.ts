@@ -102,7 +102,7 @@ export interface Sale {
   discountType?: 'fixed' | 'percentage';
   total: number;
   tax: number;
-  paymentMethod: 'cash' | 'card' | 'momo' | 'credit';
+  paymentMethod: 'cash' | 'card' | 'momo' | 'credit' | 'cheque';
   momoReference?: string;
   momoNetwork?: 'mtn' | 'vodafone' | 'airteltigo';
   momoPhone?: string;
@@ -140,7 +140,7 @@ export interface CustomerLedgerEntry {
   amount: number;
   balanceAfter: number;
   referenceId?: string; // saleId or paymentId
-  paymentMethod?: 'cash' | 'card' | 'momo';
+  paymentMethod?: 'cash' | 'card' | 'momo' | 'cheque';
   shiftId?: string;
   note?: string;
   timestamp: string;

@@ -328,7 +328,7 @@ export const generateShiftReportPDF = (
     ['Expected Cash in Till', `GHC ${(shift.expectedCash || ((shift.openingCash || 0) + (cashSales || 0) + (cashPayments || 0))).toFixed(2)}`],
     ['Actual Cash Counted', shift.closingCash ? `GHC ${shift.closingCash.toFixed(2)}` : 'N/A'],
     ['Variance', shift.closingCash ? `GHC ${(shift.closingCash - (shift.expectedCash || ((shift.openingCash || 0) + (cashSales || 0) + (cashPayments || 0)))).toFixed(2)}` : 'N/A'],
-    ['Non-Cash Sales (Card/Momo)', `GHC ${(otherSales || 0).toFixed(2)}`],
+    ['Non-Cash Sales (Card/Momo/Cheque)', `GHC ${(otherSales || 0).toFixed(2)}`],
     ['Non-Cash Cust. Payments', `GHC ${(otherPayments || 0).toFixed(2)}`]
   ];
 

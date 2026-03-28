@@ -82,7 +82,8 @@ import {
   deleteDoc,
   runTransaction
 } from 'firebase/firestore';
-import { auth, db } from './firebase';
+import { auth, db, storage } from './firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { Toaster, toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 import { usePaystackPayment } from 'react-paystack';
@@ -1766,6 +1767,87 @@ const ShiftReview = ({
   );
 };
 
+const BarcodeScanner = ({ onScan, onClose, title = "Live Scanner", description = "Point your camera at a barcode or QR code." }: { onScan: (decodedText: string) => void, onClose: () => void, title?: string, description?: string }) => {
+  const lastScanRef = React.useRef<{ code: string, time: number } | null>(null);
+
+  useEffect(() => {
+    const html5QrCode = new Html5Qrcode("qr-reader-global");
+    const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+    
+    html5QrCode.start(
+      { facingMode: "environment" },
+      config,
+      (decodedText) => {
+        const now = Date.now();
+        if (lastScanRef.current?.code === decodedText && now - lastScanRef.current.time < 2000) {
+          return;
+        }
+        lastScanRef.current = { code: decodedText, time: now };
+        onScan(decodedText);
+      },
+      () => {}
+    ).catch((err) => {
+      console.error("Scanner error", err);
+      toast.error("Failed to start camera. Please ensure camera permissions are granted.");
+      onClose();
+    });
+
+    return () => {
+      if (html5QrCode.isScanning) {
+        html5QrCode.stop().catch(err => console.error("Stop error", err));
+      }
+    };
+  }, [onScan, onClose]);
+
+  return (
+    <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[100] flex flex-col items-center justify-center p-4">
+      <div className="w-full max-w-md bg-white rounded-[2rem] overflow-hidden shadow-2xl border border-white/20">
+        <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div>
+            <h3 className="font-black text-slate-800 flex items-center gap-2 text-lg">
+              <Scan size={20} className="text-orange-500" />
+              {title}
+            </h3>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Continuous Scan Mode Active</p>
+          </div>
+          <button 
+            onClick={onClose}
+            className="p-2 bg-white rounded-full shadow-sm text-slate-400 hover:text-red-500 hover:rotate-90 transition-all duration-300"
+          >
+            <X size={20} />
+          </button>
+        </div>
+        <div className="relative">
+          <div id="qr-reader-global" className="w-full aspect-square bg-black" />
+          <div className="absolute inset-0 border-[40px] border-black/40 pointer-events-none flex items-center justify-center">
+            <div className="w-48 h-48 border-2 border-orange-500 rounded-2xl relative">
+              <div className="absolute -top-1 -left-1 w-4 h-4 border-t-4 border-l-4 border-orange-500 rounded-tl-md" />
+              <div className="absolute -top-1 -right-1 w-4 h-4 border-t-4 border-r-4 border-orange-500 rounded-tr-md" />
+              <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-4 border-l-4 border-orange-500 rounded-bl-md" />
+              <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-4 border-r-4 border-orange-500 rounded-br-md" />
+            </div>
+          </div>
+        </div>
+        <div className="p-8 text-center bg-slate-50">
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-orange-100 text-orange-700 rounded-full text-xs font-black mb-4 animate-pulse">
+            <Zap size={14} fill="currentColor" />
+            SCANNING ACTIVE
+          </div>
+          <p className="text-sm text-slate-600 font-bold leading-relaxed">
+            {description}
+          </p>
+          <Button 
+            onClick={onClose}
+            className="mt-6 w-full bg-slate-900 hover:bg-black text-white py-6 rounded-2xl font-black text-sm uppercase tracking-widest"
+          >
+            Done Scanning
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const POS = ({ products, productTemplates, onSaleComplete, currentShift, onOpenShift, onCloseShift, sales, businessUnit, customers, ledger, branches }: { 
   products: Product[], 
   productTemplates: ProductTemplate[],
@@ -1783,7 +1865,7 @@ const POS = ({ products, productTemplates, onSaleComplete, currentShift, onOpenS
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [search, setSearch] = useState('');
   const [barcodeInput, setBarcodeInput] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'momo' | 'credit'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'momo' | 'credit' | 'cheque'>('cash');
   const [customerPhone, setCustomerPhone] = useState('');
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
   const [momoReference, setMomoReference] = useState('');
@@ -1793,46 +1875,17 @@ const POS = ({ products, productTemplates, onSaleComplete, currentShift, onOpenS
   const [isScanning, setIsScanning] = useState(false);
   const [cartDiscount, setCartDiscount] = useState(0);
   const [cartDiscountType, setCartDiscountType] = useState<'fixed' | 'percentage'>('fixed');
-  const lastScanRef = React.useRef<{ code: string, time: number } | null>(null);
+  const [mobileView, setMobileView] = useState<'products' | 'cart'>('products');
 
-  useEffect(() => {
-    let html5QrCode: Html5Qrcode | null = null;
-    if (isScanning) {
-      html5QrCode = new Html5Qrcode("qr-reader");
-      const config = { fps: 10, qrbox: { width: 250, height: 250 } };
-      html5QrCode.start(
-        { facingMode: "environment" },
-        config,
-        (decodedText) => {
-          const now = Date.now();
-          // Prevent duplicate scans of the same code within 2 seconds
-          if (lastScanRef.current?.code === decodedText && now - lastScanRef.current.time < 2000) {
-            return;
-          }
-
-          const product = products.find(p => p.barcode === decodedText || p.sku === decodedText);
-          if (product) {
-            addToCart(product, 1);
-            toast.success(`Added ${product.name}`, { duration: 1500 });
-            lastScanRef.current = { code: decodedText, time: now };
-          } else {
-            toast.error(`Unknown barcode: ${decodedText}`, { duration: 1500 });
-            lastScanRef.current = { code: decodedText, time: now };
-          }
-        },
-        () => {} // Ignore errors
-      ).catch((err) => {
-        console.error("Scanner error", err);
-        toast.error("Failed to start camera");
-        setIsScanning(false);
-      });
+  const handleScan = (decodedText: string) => {
+    const product = products.find(p => p.barcode === decodedText || p.sku === decodedText);
+    if (product) {
+      addToCart(product, 1);
+      toast.success(`Added ${product.name}`, { duration: 1500 });
+    } else {
+      toast.error(`Unknown barcode: ${decodedText}`, { duration: 1500 });
     }
-    return () => {
-      if (html5QrCode) {
-        html5QrCode.stop().catch(err => console.error("Stop error", err));
-      }
-    };
-  }, [isScanning, products]);
+  };
 
   const filteredProducts = useMemo(() => {
     const query = search.toLowerCase().trim();
@@ -2086,52 +2139,11 @@ const POS = ({ products, productTemplates, onSaleComplete, currentShift, onOpenS
   return (
     <div className="flex flex-col h-full min-h-[600px] gap-4">
       {isScanning && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[100] flex flex-col items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white rounded-[2rem] overflow-hidden shadow-2xl border border-white/20">
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-              <div>
-                <h3 className="font-black text-slate-800 flex items-center gap-2 text-lg">
-                  <Scan size={20} className="text-orange-500" />
-                  Live Scanner
-                </h3>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Continuous Scan Mode Active</p>
-              </div>
-              <button 
-                onClick={() => setIsScanning(false)}
-                className="p-2 bg-white rounded-full shadow-sm text-slate-400 hover:text-red-500 hover:rotate-90 transition-all duration-300"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="relative">
-              <div id="qr-reader" className="w-full aspect-square bg-black" />
-              <div className="absolute inset-0 border-[40px] border-black/40 pointer-events-none flex items-center justify-center">
-                <div className="w-48 h-48 border-2 border-orange-500 rounded-2xl relative">
-                  <div className="absolute -top-1 -left-1 w-4 h-4 border-t-4 border-l-4 border-orange-500 rounded-tl-md" />
-                  <div className="absolute -top-1 -right-1 w-4 h-4 border-t-4 border-r-4 border-orange-500 rounded-tr-md" />
-                  <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-4 border-l-4 border-orange-500 rounded-bl-md" />
-                  <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-4 border-r-4 border-orange-500 rounded-br-md" />
-                </div>
-              </div>
-            </div>
-            <div className="p-8 text-center bg-slate-50">
-              <div className="inline-flex items-center gap-2 px-4 py-2 bg-orange-100 text-orange-700 rounded-full text-xs font-black mb-4 animate-pulse">
-                <Zap size={14} fill="currentColor" />
-                AUTO-ADDING ITEMS
-              </div>
-              <p className="text-sm text-slate-600 font-bold leading-relaxed">
-                Point your camera at a barcode or QR code.<br/>
-                Items will be added instantly to your cart.
-              </p>
-              <Button 
-                onClick={() => setIsScanning(false)}
-                className="mt-6 w-full bg-slate-900 hover:bg-black text-white py-6 rounded-2xl font-black text-sm uppercase tracking-widest"
-              >
-                Done Scanning
-              </Button>
-            </div>
-          </div>
-        </div>
+        <BarcodeScanner 
+          onScan={handleScan} 
+          onClose={() => setIsScanning(false)} 
+          description="Point your camera at a barcode or QR code. Items will be added instantly to your cart."
+        />
       )}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
@@ -2268,8 +2280,42 @@ const POS = ({ products, productTemplates, onSaleComplete, currentShift, onOpenS
         )}
       </AnimatePresence>
 
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-6 flex-1 overflow-hidden">
-        <div className="md:col-span-7 lg:col-span-8 flex flex-col gap-4 overflow-hidden">
+      <div className="flex lg:hidden bg-white p-1 rounded-2xl border border-slate-100 shadow-sm mb-2">
+        <button 
+          onClick={() => setMobileView('products')}
+          className={cn(
+            "flex-1 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2",
+            mobileView === 'products' ? "bg-orange-500 text-white shadow-lg shadow-orange-200" : "text-slate-400"
+          )}
+        >
+          <Package size={16} />
+          Products
+        </button>
+        <button 
+          onClick={() => setMobileView('cart')}
+          className={cn(
+            "flex-1 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 relative",
+            mobileView === 'cart' ? "bg-orange-500 text-white shadow-lg shadow-orange-200" : "text-slate-400"
+          )}
+        >
+          <ShoppingCart size={16} />
+          Cart
+          {cart.length > 0 && (
+            <span className={cn(
+              "absolute -top-1 -right-1 w-5 h-5 rounded-full text-[10px] flex items-center justify-center border-2 border-white",
+              mobileView === 'cart' ? "bg-slate-900 text-white" : "bg-orange-500 text-white"
+            )}>
+              {cart.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      <div className="flex flex-col lg:flex-row gap-6 flex-1 overflow-hidden">
+        <div className={cn(
+          "lg:flex-[7] xl:flex-[8] flex flex-col gap-4 overflow-hidden",
+          mobileView !== 'products' && "hidden lg:flex"
+        )}>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Card className="p-3 flex items-center gap-3 border-orange-200 bg-orange-50/30 group focus-within:ring-2 ring-orange-500/20 transition-all relative overflow-hidden">
               <div className="p-2 bg-orange-500 text-white rounded-lg shadow-sm">
@@ -2359,7 +2405,10 @@ const POS = ({ products, productTemplates, onSaleComplete, currentShift, onOpenS
           </div>
         </div>
 
-        <div className="md:col-span-5 lg:col-span-4 flex flex-col h-full overflow-hidden">
+        <div className={cn(
+          "lg:flex-[5] xl:flex-[4] flex flex-col h-full overflow-hidden",
+          mobileView !== 'cart' && "hidden lg:flex"
+        )}>
           <Card className="flex flex-col h-full overflow-hidden border-orange-100 shadow-lg">
           <div className="p-6 border-b border-slate-100 bg-slate-50/80 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -2518,7 +2567,7 @@ const POS = ({ products, productTemplates, onSaleComplete, currentShift, onOpenS
                 </div>
               </div>
 
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-5 gap-2">
                 <button 
                   onClick={() => setPaymentMethod('cash')}
                   className={cn(
@@ -2548,6 +2597,16 @@ const POS = ({ products, productTemplates, onSaleComplete, currentShift, onOpenS
                 >
                   <Smartphone size={20} />
                   <span className="text-[10px] font-black uppercase tracking-widest">MoMo</span>
+                </button>
+                <button 
+                  onClick={() => setPaymentMethod('cheque')}
+                  className={cn(
+                    "flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all duration-300",
+                    paymentMethod === 'cheque' ? "bg-slate-900 text-white border-slate-900 shadow-xl shadow-slate-200" : "bg-white text-slate-400 border-slate-100 hover:border-slate-200"
+                  )}
+                >
+                  <FileText size={20} />
+                  <span className="text-[10px] font-black uppercase tracking-widest">Cheque</span>
                 </button>
                 <button 
                   onClick={() => setPaymentMethod('credit')}
@@ -2643,16 +2702,68 @@ const ProductCatalog = ({ templates, onAddTemplate, onUpdateTemplate, onDeleteTe
   const [search, setSearch] = useState('');
   const [isBundle, setIsBundle] = useState(false);
   const [bundleItems, setBundleItems] = useState<BundleItem[]>([]);
+  const [barcode, setBarcode] = useState('');
+  const [imageUrl, setImageUrl] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
 
   useEffect(() => {
     if (editingTemplate) {
       setIsBundle(!!editingTemplate.isBundle);
       setBundleItems(editingTemplate.bundleItems || []);
+      setBarcode(editingTemplate.barcode || '');
+      setImageUrl(editingTemplate.imageUrl || '');
     } else {
       setIsBundle(false);
       setBundleItems([]);
+      setBarcode('');
+      setImageUrl('');
     }
   }, [editingTemplate, isAdding]);
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please upload an image file');
+      return;
+    }
+
+    // Validate file size (max 2MB)
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('Image size must be less than 2MB');
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      const storageRef = ref(storage, `product-templates/${Date.now()}_${file.name}`);
+      const snapshot = await uploadBytes(storageRef, file);
+      const url = await getDownloadURL(snapshot.ref);
+      setImageUrl(url);
+      toast.success('Image uploaded successfully');
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      toast.error('Failed to upload image');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const generateBarcode = () => {
+    let newBarcode = '';
+    let isUnique = false;
+    let attempts = 0;
+    while (!isUnique && attempts < 100) {
+      // Generate a 12-digit random number
+      newBarcode = Math.floor(Math.random() * 900000000000 + 100000000000).toString();
+      isUnique = !templates.some(t => t.barcode === newBarcode);
+      attempts++;
+    }
+    setBarcode(newBarcode);
+    toast.success('Unique barcode generated!');
+  };
 
   const filtered = templates.filter(t => 
     t.name.toLowerCase().includes(search.toLowerCase()) || 
@@ -2720,10 +2831,19 @@ const ProductCatalog = ({ templates, onAddTemplate, onUpdateTemplate, onDeleteTe
               </button>
             </div>
             <div className="flex items-start justify-between mb-4">
-              <div className="p-3 bg-orange-50 text-orange-500 rounded-2xl group-hover:bg-orange-500 group-hover:text-white transition-colors relative">
-                <Package size={24} />
+              <div className="p-3 bg-orange-50 text-orange-500 rounded-2xl group-hover:bg-orange-500 group-hover:text-white transition-colors relative overflow-hidden w-16 h-16 flex items-center justify-center">
+                {template.imageUrl ? (
+                  <img 
+                    src={template.imageUrl} 
+                    alt={template.name} 
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <Package size={24} />
+                )}
                 {template.isBundle && (
-                  <div className="absolute -top-2 -right-2 bg-blue-500 text-white p-1 rounded-full shadow-sm" title="Product Bundle">
+                  <div className="absolute -top-1 -right-1 bg-blue-500 text-white p-1 rounded-full shadow-sm z-10" title="Product Bundle">
                     <Zap size={10} />
                   </div>
                 )}
@@ -2801,6 +2921,7 @@ const ProductCatalog = ({ templates, onAddTemplate, onUpdateTemplate, onDeleteTe
                     description: formData.get('description') as string,
                     costPrice: Number(formData.get('costPrice')),
                     sellingPrice: Number(formData.get('sellingPrice')),
+                    imageUrl,
                     isBundle,
                     bundleItems: isBundle ? bundleItems.filter(item => item.templateId) : [],
                   };
@@ -2814,6 +2935,51 @@ const ProductCatalog = ({ templates, onAddTemplate, onUpdateTemplate, onDeleteTe
                   setEditingTemplate(null);
                 }}
               >
+                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-3">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Product Image</label>
+                  <div className="flex items-center gap-4">
+                    <div className="w-24 h-24 rounded-xl bg-white border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden relative group">
+                      {imageUrl ? (
+                        <>
+                          <img src={imageUrl} alt="Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          <button 
+                            type="button"
+                            onClick={() => setImageUrl('')}
+                            className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </>
+                      ) : (
+                        <Upload className="text-slate-300" size={24} />
+                      )}
+                      {isUploading && (
+                        <div className="absolute inset-0 bg-white/80 flex items-center justify-center">
+                          <Loader2 className="animate-spin text-orange-500" size={20} />
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1 space-y-2">
+                      <p className="text-[10px] text-slate-400 font-medium">Upload a clear product image. Max 2MB.</p>
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        onChange={handleImageUpload}
+                        className="hidden" 
+                        id="image-upload"
+                        disabled={isUploading}
+                      />
+                      <label 
+                        htmlFor="image-upload"
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-50 cursor-pointer transition-colors"
+                      >
+                        <Camera size={14} />
+                        {imageUrl ? 'Change Image' : 'Select Image'}
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl border border-slate-100">
                   <input 
                     type="checkbox" 
@@ -2895,7 +3061,24 @@ const ProductCatalog = ({ templates, onAddTemplate, onUpdateTemplate, onDeleteTe
                   </div>
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-500 uppercase">Barcode</label>
-                    <input name="barcode" defaultValue={editingTemplate?.barcode} className="w-full p-2 rounded-lg border border-slate-200 outline-none focus:border-orange-500" />
+                    <div className="flex gap-2">
+                      <input 
+                        name="barcode" 
+                        value={barcode} 
+                        onChange={e => setBarcode(e.target.value)}
+                        className="flex-1 p-2 rounded-lg border border-slate-200 outline-none focus:border-orange-500" 
+                        placeholder="Scan or enter barcode"
+                      />
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        onClick={generateBarcode}
+                        className="px-3 border-slate-200 text-slate-600 hover:bg-slate-50"
+                        title="Generate Unique Barcode"
+                      >
+                        <Scan size={16} />
+                      </Button>
+                    </div>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -3138,6 +3321,14 @@ const Inventory = ({ products, categories, branches, onAddProduct, onUpdateProdu
   const [bulkEditValue, setBulkEditValue] = useState<string | number>('');
   const [isConfirmingBulk, setIsConfirmingBulk] = useState(false);
   const [isProcessingBulk, setIsProcessingBulk] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+
+  const handleScan = (decodedText: string) => {
+    setSearch(decodedText);
+    setIsScanning(false);
+    toast.success(`Searching for: ${decodedText}`);
+  };
 
   const expiringSoon = products.filter(p => {
     if (!p.expiryDate) return false;
@@ -3227,6 +3418,13 @@ const Inventory = ({ products, categories, branches, onAddProduct, onUpdateProdu
 
   return (
     <div className="space-y-6">
+      {isScanning && (
+        <BarcodeScanner 
+          onScan={handleScan} 
+          onClose={() => setIsScanning(false)} 
+          description="Point your camera at a barcode. The inventory will be filtered to match the scanned code."
+        />
+      )}
       {(expiringSoon.length > 0 || lowStockItems.length > 0 || expiredItems.length > 0) && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {expiredItems.length > 0 && (
@@ -3340,6 +3538,13 @@ const Inventory = ({ products, categories, branches, onAddProduct, onUpdateProdu
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
+          <button 
+            onClick={() => setIsScanning(true)}
+            className="p-2 text-slate-400 hover:text-orange-500 transition-colors"
+            title="Scan Barcode"
+          >
+            <Scan size={20} />
+          </button>
         </div>
         <div className="flex items-center gap-3">
           <Button variant="outline" onClick={() => setIsManagingCategories(true)}>
@@ -3357,8 +3562,9 @@ const Inventory = ({ products, categories, branches, onAddProduct, onUpdateProdu
         </div>
       </div>
 
-      <Card>
-        <div className="overflow-x-auto">
+      <Card className="overflow-hidden">
+        {/* Desktop Table View */}
+        <div className="hidden lg:block overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50/50 border-b border-slate-100">
@@ -3382,11 +3588,15 @@ const Inventory = ({ products, categories, branches, onAddProduct, onUpdateProdu
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map(product => (
-                <tr key={product.id} className={cn(
-                  "hover:bg-slate-50 transition-colors",
-                  selectedProductIds.includes(product.id) && "bg-orange-50/50"
-                )}>
-                  <td className="px-6 py-5">
+                <tr 
+                  key={product.id} 
+                  onClick={() => setEditingProduct(product)}
+                  className={cn(
+                    "hover:bg-slate-50 transition-colors cursor-pointer",
+                    selectedProductIds.includes(product.id) && "bg-orange-50/50"
+                  )}
+                >
+                  <td className="px-6 py-5" onClick={(e) => e.stopPropagation()}>
                     <input 
                       type="checkbox" 
                       className="rounded-lg border-slate-300 text-orange-500 focus:ring-orange-500 w-5 h-5 transition-all"
@@ -3498,6 +3708,77 @@ const Inventory = ({ products, categories, branches, onAddProduct, onUpdateProdu
               ))}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile Card View */}
+        <div className="lg:hidden divide-y divide-slate-100">
+          {filtered.map(product => (
+            <div 
+              key={product.id} 
+              onClick={() => setEditingProduct(product)}
+              className={cn(
+                "p-4 space-y-4 hover:bg-slate-50 transition-colors cursor-pointer",
+                selectedProductIds.includes(product.id) && "bg-orange-50/50"
+              )}
+            >
+              <div className="flex items-start gap-4">
+                <div onClick={(e) => e.stopPropagation()}>
+                  <input 
+                    type="checkbox" 
+                    className="mt-1 rounded-lg border-slate-300 text-orange-500 focus:ring-orange-500 w-5 h-5 transition-all"
+                    checked={selectedProductIds.includes(product.id)}
+                    onChange={() => toggleSelectProduct(product.id)}
+                  />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-black text-slate-800 uppercase tracking-tight truncate">{product.name}</p>
+                    {templates.find(t => t.id === product.templateId)?.isBundle && (
+                      <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[8px] font-black rounded-full uppercase tracking-widest">Bundle</span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-0.5">{product.brand} • {product.unit}</p>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-[8px] font-black rounded-full uppercase tracking-widest">
+                      {categories.find(c => c.id === product.category)?.name || product.category}
+                    </span>
+                    <span className="px-2 py-0.5 bg-orange-100 text-orange-600 text-[8px] font-black rounded-full uppercase tracking-widest">
+                      {product.sku}
+                    </span>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-black text-slate-800 font-mono">₵{formatCurrency(product.price)}</p>
+                  <span className={cn(
+                    "inline-block mt-1 px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest",
+                    product.stockLevel > product.reorderPoint ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
+                  )}>
+                    {product.stockLevel} IN STOCK
+                  </span>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-50">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 bg-slate-100 rounded-lg text-slate-400">
+                    <Store size={12} />
+                  </div>
+                  <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest truncate">
+                    {branches.find(b => b.id === product.branchId)?.name || 'Unknown'}
+                  </span>
+                </div>
+                {product.expiryDate && (
+                  <div className={cn(
+                    "flex items-center gap-2 px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest justify-end",
+                    new Date(product.expiryDate) < new Date() ? "text-red-600" : "text-slate-500"
+                  )}>
+                    <Calendar size={10} />
+                    Exp: {new Date(product.expiryDate).toLocaleDateString()}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       </Card>
 
@@ -3839,6 +4120,115 @@ const Inventory = ({ products, categories, branches, onAddProduct, onUpdateProdu
           </div>
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
+        {editingProduct && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[110] p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-lg overflow-hidden border border-white/20"
+            >
+              <div className="p-8 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <div>
+                  <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Edit Product</h3>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Update product details in inventory</p>
+                </div>
+                <button 
+                  onClick={() => setEditingProduct(null)} 
+                  className="p-2 bg-white rounded-full shadow-sm text-slate-400 hover:text-red-500 hover:rotate-90 transition-all duration-300"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <form 
+                className="p-8 space-y-6"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  const formData = new FormData(e.currentTarget);
+                  const updates = {
+                    name: formData.get('name') as string,
+                    sku: formData.get('sku') as string,
+                    price: Number(formData.get('price')),
+                    stockLevel: Number(formData.get('stockLevel')),
+                    expiryDate: formData.get('expiryDate') as string,
+                  };
+                  
+                  try {
+                    await onUpdateProduct(editingProduct.id, updates);
+                    toast.success('Product updated successfully');
+                    setEditingProduct(null);
+                  } catch (err) {
+                    toast.error('Failed to update product');
+                  }
+                }}
+              >
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Product Name</label>
+                  <input 
+                    name="name"
+                    defaultValue={editingProduct.name}
+                    className="w-full p-4 rounded-2xl border-2 border-slate-100 bg-slate-50 text-sm font-bold text-slate-800 outline-none focus:border-orange-500 focus:bg-white transition-all"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">SKU</label>
+                    <input 
+                      name="sku"
+                      defaultValue={editingProduct.sku}
+                      className="w-full p-4 rounded-2xl border-2 border-slate-100 bg-slate-50 text-sm font-bold text-slate-800 outline-none focus:border-orange-500 focus:bg-white transition-all"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Price (GHC)</label>
+                    <input 
+                      name="price"
+                      type="number"
+                      step="0.01"
+                      defaultValue={editingProduct.price}
+                      className="w-full p-4 rounded-2xl border-2 border-slate-100 bg-slate-50 text-sm font-bold text-slate-800 outline-none focus:border-orange-500 focus:bg-white transition-all"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Stock Level</label>
+                    <input 
+                      name="stockLevel"
+                      type="number"
+                      defaultValue={editingProduct.stockLevel}
+                      className="w-full p-4 rounded-2xl border-2 border-slate-100 bg-slate-50 text-sm font-bold text-slate-800 outline-none focus:border-orange-500 focus:bg-white transition-all"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Expiry Date</label>
+                    <input 
+                      name="expiryDate"
+                      type="date"
+                      defaultValue={editingProduct.expiryDate}
+                      className="w-full p-4 rounded-2xl border-2 border-slate-100 bg-slate-50 text-sm font-bold text-slate-800 outline-none focus:border-orange-500 focus:bg-white transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-4 flex gap-3">
+                  <Button type="button" variant="outline" onClick={() => setEditingProduct(null)} className="flex-1 py-6 rounded-2xl font-black text-sm uppercase tracking-widest">Cancel</Button>
+                  <Button type="submit" className="flex-1 py-6 bg-orange-500 hover:bg-orange-600 text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-orange-200">Save Changes</Button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -3848,7 +4238,7 @@ const Customers = ({ customers, ledger, onAddCustomer, onUpdateCustomer, onAddPa
   ledger: CustomerLedgerEntry[],
   onAddCustomer: (customer: Partial<Customer>) => void,
   onUpdateCustomer: (id: string, customer: Partial<Customer>) => void,
-  onAddPayment: (customerId: string, amount: number, note: string, paymentMethod: 'cash' | 'card' | 'momo', shiftId?: string) => void,
+  onAddPayment: (customerId: string, amount: number, note: string, paymentMethod: 'cash' | 'card' | 'momo' | 'cheque', shiftId?: string) => void,
   clerkId: string,
   businessUnitId: string,
   currentShift: Shift | null
@@ -3859,7 +4249,7 @@ const Customers = ({ customers, ledger, onAddCustomer, onUpdateCustomer, onAddPa
   const [search, setSearch] = useState('');
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'momo'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'momo' | 'cheque'>('cash');
   const [paymentNote, setPaymentNote] = useState('');
 
   const filteredCustomers = customers.filter(c => 
@@ -4185,7 +4575,7 @@ const Customers = ({ customers, ledger, onAddCustomer, onUpdateCustomer, onAddPa
                 <div className="space-y-1">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Payment Method</label>
                   <div className="grid grid-cols-3 gap-2">
-                    {(['cash', 'card', 'momo'] as const).map(method => (
+                    {(['cash', 'card', 'momo', 'cheque'] as const).map(method => (
                       <button
                         key={method}
                         type="button"
@@ -4607,8 +4997,9 @@ const SalesArchive = ({ sales, onRefund, profile, businessUnit, branches }: { sa
         </div>
       </div>
 
-      <Card>
-        <div className="overflow-x-auto">
+      <Card className="overflow-hidden">
+        {/* Desktop Table View */}
+        <div className="hidden lg:block overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50/50 border-b border-slate-100">
@@ -4694,6 +5085,76 @@ const SalesArchive = ({ sales, onRefund, profile, businessUnit, branches }: { sa
               ))}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile Card View */}
+        <div className="lg:hidden divide-y divide-slate-100">
+          {filteredSales.map((sale) => (
+            <div key={sale.id} className="p-4 space-y-4">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                    {format(new Date(sale.timestamp), 'MMM dd, yyyy • HH:mm')}
+                  </p>
+                  <p className="text-xs font-mono text-slate-500 font-bold mt-1">
+                    #{sale.id.slice(-8).toUpperCase()}
+                  </p>
+                </div>
+                <span className={cn(
+                  "px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest",
+                  sale.status === 'refunded' ? 'bg-rose-100 text-rose-600' : 'bg-emerald-100 text-emerald-600'
+                )}>
+                  {sale.status || 'completed'}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between bg-slate-50 p-3 rounded-xl">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 bg-white rounded-full flex items-center justify-center text-slate-400 font-black text-[10px] uppercase shadow-sm">
+                    {sale.clerkName?.charAt(0)}
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-slate-800 uppercase tracking-tight">{sale.clerkName}</p>
+                    <p className="text-[8px] text-slate-500 font-bold uppercase">{sale.items.length} items</p>
+                  </div>
+                </div>
+                <p className="text-sm font-black text-slate-800">₵{formatCurrency(sale.total)}</p>
+              </div>
+
+              <div className="grid grid-cols-4 gap-2">
+                <Button 
+                  variant="outline" 
+                  onClick={() => setSelectedSaleForDetails(sale)}
+                  className="h-10 p-0 rounded-xl border-slate-100"
+                >
+                  <Eye size={16} />
+                </Button>
+                <Button 
+                  variant="outline" 
+                  onClick={() => generateReceiptPDF(sale, businessUnit, branches.find(b => b.id === sale.branchId), branches)}
+                  className="h-10 p-0 rounded-xl border-slate-100"
+                >
+                  <Printer size={16} />
+                </Button>
+                <Button 
+                  variant="outline" 
+                  onClick={() => generateInvoicePDF(sale, businessUnit, branches.find(b => b.id === sale.branchId), branches)}
+                  className="h-10 p-0 rounded-xl border-slate-100"
+                >
+                  <FileText size={16} />
+                </Button>
+                {sale.status !== 'refunded' && ['manager', 'supervisor'].includes(profile?.role || '') && (
+                  <Button 
+                    variant="outline" 
+                    onClick={() => handleRefundClick(sale)}
+                    className="h-10 p-0 rounded-xl border-rose-100 text-rose-500 hover:bg-rose-50"
+                  >
+                    <RefreshCcw size={16} />
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       </Card>
 
@@ -4811,6 +5272,7 @@ const SalesArchive = ({ sales, onRefund, profile, businessUnit, branches }: { sa
 const Reports = ({ sales, products, categories, branches }: { sales: Sale[], products: Product[], categories: Category[], branches: Branch[] }) => {
   const [startDate, setStartDate] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
   const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [summaryPeriod, setSummaryPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
 
   const filteredSales = useMemo(() => {
     return sales.filter(sale => {
@@ -4830,6 +5292,23 @@ const Reports = ({ sales, products, categories, branches }: { sales: Sale[], pro
     return { name: cat.name, value: total };
   }).filter(c => c.value > 0);
 
+  const salesByPaymentMethod = useMemo(() => {
+    const methods: Record<string, number> = {
+      cash: 0,
+      card: 0,
+      momo: 0,
+      credit: 0,
+      cheque: 0
+    };
+    filteredSales.forEach(sale => {
+      methods[sale.paymentMethod] = (methods[sale.paymentMethod] || 0) + sale.total;
+    });
+    return Object.entries(methods).map(([name, value]) => ({ 
+      name: name.toUpperCase(), 
+      value 
+    })).filter(m => m.value > 0);
+  }, [filteredSales]);
+
   const salesByBranch = branches.map(branch => {
     const total = filteredSales
       .filter(s => s.branchId === branch.id)
@@ -4839,6 +5318,8 @@ const Reports = ({ sales, products, categories, branches }: { sales: Sale[], pro
 
   const totalVat = filteredSales.reduce((acc, s) => acc + (s.tax || 0), 0);
   const totalSales = filteredSales.reduce((acc, s) => acc + s.total, 0);
+  const avgSaleValue = filteredSales.length > 0 ? totalSales / filteredSales.length : 0;
+  const transactionCount = filteredSales.length;
 
   const dailyTrend = Array.from({ length: 14 }).map((_, i) => {
     const date = subDays(new Date(), i);
@@ -4854,15 +5335,101 @@ const Reports = ({ sales, products, categories, branches }: { sales: Sale[], pro
 
   const COLORS = ['#f97316', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899', '#f59e0b'];
 
+  const quickSummaries = useMemo(() => {
+    const now = new Date();
+    const today = format(now, 'yyyy-MM-dd');
+    const startOfWeek = format(subDays(now, now.getDay()), 'yyyy-MM-dd');
+    const startOfMonth = format(new Date(now.getFullYear(), now.getMonth(), 1), 'yyyy-MM-dd');
+
+    const daily = sales.filter(s => s.timestamp.startsWith(today)).reduce((acc, s) => acc + s.total, 0);
+    const weekly = sales.filter(s => s.timestamp.split('T')[0] >= startOfWeek).reduce((acc, s) => acc + s.total, 0);
+    const monthly = sales.filter(s => s.timestamp.split('T')[0] >= startOfMonth).reduce((acc, s) => acc + s.total, 0);
+
+    return { daily, weekly, monthly };
+  }, [sales]);
+
+  const exportToCSV = () => {
+    if (filteredSales.length === 0) {
+      toast.error('No sales data to export for the selected range');
+      return;
+    }
+
+    const csvData = filteredSales.map(sale => ({
+      'Date': format(new Date(sale.timestamp), 'yyyy-MM-dd HH:mm'),
+      'Sale ID': sale.id,
+      'Branch': branches.find(b => b.id === sale.branchId)?.name || 'Unknown',
+      'Subtotal': (sale.subtotal || (sale.total - (sale.tax || 0))).toFixed(2),
+      'VAT': (sale.tax || 0).toFixed(2),
+      'Total': sale.total.toFixed(2)
+    }));
+
+    const csv = Papa.unparse(csvData);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `sales_report_${startDate}_to_${endDate}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success('Sales report exported to CSV');
+  };
+
   return (
     <div className="space-y-8">
-      <Card className="p-6 bg-slate-50/50 border-slate-100">
-        <div className="flex flex-col md:flex-row md:items-end gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Card className="p-6 bg-gradient-to-br from-orange-500 to-orange-600 text-white border-none shadow-xl shadow-orange-100">
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-80">Today's Sales</p>
+              <h3 className="text-3xl font-black mt-1">GHC {quickSummaries.daily.toLocaleString()}</h3>
+            </div>
+            <div className="p-2 bg-white/20 rounded-xl backdrop-blur-md">
+              <Calendar size={20} />
+            </div>
+          </div>
+          <div className="mt-4 flex items-center gap-2 text-[10px] font-bold">
+            <span className="px-2 py-0.5 bg-white/20 rounded-full">Live Update</span>
+          </div>
+        </Card>
+        <Card className="p-6 bg-gradient-to-br from-blue-600 to-blue-700 text-white border-none shadow-xl shadow-blue-100">
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-80">Weekly Sales</p>
+              <h3 className="text-3xl font-black mt-1">GHC {quickSummaries.weekly.toLocaleString()}</h3>
+            </div>
+            <div className="p-2 bg-white/20 rounded-xl backdrop-blur-md">
+              <BarChart3 size={20} />
+            </div>
+          </div>
+          <div className="mt-4 flex items-center gap-2 text-[10px] font-bold">
+            <span className="px-2 py-0.5 bg-white/20 rounded-full">This Week</span>
+          </div>
+        </Card>
+        <Card className="p-6 bg-gradient-to-br from-slate-800 to-slate-900 text-white border-none shadow-xl shadow-slate-200">
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-80">Monthly Sales</p>
+              <h3 className="text-3xl font-black mt-1">GHC {quickSummaries.monthly.toLocaleString()}</h3>
+            </div>
+            <div className="p-2 bg-white/20 rounded-xl backdrop-blur-md">
+              <Archive size={20} />
+            </div>
+          </div>
+          <div className="mt-4 flex items-center gap-2 text-[10px] font-bold">
+            <span className="px-2 py-0.5 bg-white/20 rounded-full">This Month</span>
+          </div>
+        </Card>
+      </div>
+
+      <Card className="p-4 md:p-6 bg-slate-50/50 border-slate-100">
+        <div className="flex flex-col md:flex-row md:items-end gap-4 md:gap-6">
           <div className="flex-1 space-y-2">
             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Report Start Date</label>
             <input 
               type="date"
-              className="w-full p-4 rounded-2xl border-2 border-white bg-white shadow-sm text-sm font-bold text-slate-800 outline-none focus:border-orange-500 transition-all"
+              className="w-full p-3 md:p-4 rounded-2xl border-2 border-white bg-white shadow-sm text-sm font-bold text-slate-800 outline-none focus:border-orange-500 transition-all"
               value={startDate}
               onChange={e => setStartDate(e.target.value)}
             />
@@ -4871,23 +5438,66 @@ const Reports = ({ sales, products, categories, branches }: { sales: Sale[], pro
             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Report End Date</label>
             <input 
               type="date"
-              className="w-full p-4 rounded-2xl border-2 border-white bg-white shadow-sm text-sm font-bold text-slate-800 outline-none focus:border-orange-500 transition-all"
+              className="w-full p-3 md:p-4 rounded-2xl border-2 border-white bg-white shadow-sm text-sm font-bold text-slate-800 outline-none focus:border-orange-500 transition-all"
               value={endDate}
               onChange={e => setEndDate(e.target.value)}
             />
           </div>
-          <div className="flex gap-4">
-            <Card className="px-6 py-3 bg-orange-500 text-white border-none shadow-lg shadow-orange-100">
+          <div className="grid grid-cols-2 md:flex gap-3 md:gap-4">
+            <Card className="px-4 md:px-6 py-3 bg-orange-500 text-white border-none shadow-lg shadow-orange-100 flex-1">
               <p className="text-[9px] font-black uppercase opacity-80">Total Sales</p>
-              <p className="text-xl font-black">GHC {(totalSales || 0).toLocaleString()}</p>
+              <p className="text-lg md:text-xl font-black">GHC {(totalSales || 0).toLocaleString()}</p>
             </Card>
-            <Card className="px-6 py-3 bg-slate-900 text-white border-none shadow-lg shadow-slate-200">
+            <Card className="px-4 md:px-6 py-3 bg-slate-900 text-white border-none shadow-lg shadow-slate-200 flex-1">
               <p className="text-[9px] font-black uppercase opacity-80">VAT Collected</p>
-              <p className="text-xl font-black">GHC {(totalVat || 0).toLocaleString()}</p>
+              <p className="text-lg md:text-xl font-black">GHC {(totalVat || 0).toLocaleString()}</p>
             </Card>
           </div>
+          <Button 
+            onClick={exportToCSV}
+            className="w-full md:w-auto py-4 px-6 bg-white border-2 border-slate-100 text-slate-600 hover:border-orange-500 hover:text-orange-500 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+          >
+            <Upload size={16} />
+            Export CSV
+          </Button>
         </div>
       </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Card className="p-6 bg-white border-slate-100 shadow-sm">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-orange-50 text-orange-500 rounded-2xl flex items-center justify-center">
+              <ShoppingCart size={24} />
+            </div>
+            <div>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Transactions</p>
+              <p className="text-2xl font-black text-slate-800">{transactionCount}</p>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-6 bg-white border-slate-100 shadow-sm">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-blue-50 text-blue-500 rounded-2xl flex items-center justify-center">
+              <BarChart3 size={24} />
+            </div>
+            <div>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Avg. Sale Value</p>
+              <p className="text-2xl font-black text-slate-800">GHC {formatCurrency(avgSaleValue)}</p>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-6 bg-white border-slate-100 shadow-sm">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-emerald-50 text-emerald-500 rounded-2xl flex items-center justify-center">
+              <CheckCircle2 size={24} />
+            </div>
+            <div>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Completed Sales</p>
+              <p className="text-2xl font-black text-slate-800">{filteredSales.filter(s => s.status !== 'refunded').length}</p>
+            </div>
+          </div>
+        </Card>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <Card className="p-6">
@@ -4911,6 +5521,39 @@ const Reports = ({ sales, products, categories, branches }: { sales: Sale[], pro
                 >
                   {salesByCategory.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip 
+                  formatter={(value: number) => [`GHC ${formatCurrency(value)}`, 'Sales']}
+                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                />
+                <Legend verticalAlign="bottom" height={36}/>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        <Card className="p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h4 className="text-sm font-bold text-slate-500 uppercase">Sales by Payment Method</h4>
+            <div className="w-8 h-8 bg-emerald-50 text-emerald-500 rounded-lg flex items-center justify-center">
+              <CreditCard size={16} />
+            </div>
+          </div>
+          <div className="h-64 min-h-[256px]">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0} debounce={100}>
+              <PieChart>
+                <Pie
+                  data={salesByPaymentMethod}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={80}
+                  paddingAngle={5}
+                  dataKey="value"
+                >
+                  {salesByPaymentMethod.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={COLORS[(index + 2) % COLORS.length]} />
                   ))}
                 </Pie>
                 <Tooltip 
@@ -5983,6 +6626,7 @@ function App() {
   const [profile, setProfile] = useState<User | null>(null);
   const [businessUnit, setBusinessUnit] = useState<BusinessUnit | null>(null);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   useEffect(() => {
     logEvent({ type: 'page_view', page: activeTab });
@@ -6799,7 +7443,7 @@ function App() {
     }
   };
 
-  const handleAddCustomerPayment = async (customerId: string, amount: number, note: string, paymentMethod: 'cash' | 'card' | 'momo' = 'cash', shiftId?: string) => {
+  const handleAddCustomerPayment = async (customerId: string, amount: number, note: string, paymentMethod: 'cash' | 'card' | 'momo' | 'cheque' = 'cash', shiftId?: string) => {
     if (!profile?.businessUnitId || !user?.uid) return;
     
     try {
@@ -7342,183 +7986,225 @@ function App() {
         />
       )}
 
-      {/* Sidebar */}
-      <aside className="w-64 bg-white border-r border-slate-100 p-6 flex flex-col gap-8">
-        <div className="flex items-center gap-3 px-2">
-          <div className="p-2 bg-orange-500 text-white rounded-lg">
-            <Store size={24} />
-          </div>
-          <span className="text-xl font-black text-slate-800 tracking-tight">GAM SHOP</span>
-        </div>
+      {/* Mobile Sidebar Overlay */}
+      <AnimatePresence>
+        {isSidebarOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setIsSidebarOpen(false)}
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] lg:hidden"
+          />
+        )}
+      </AnimatePresence>
 
-        <nav className="flex-1 space-y-2 overflow-y-auto pr-2">
-          <SidebarItem 
-            icon={LayoutDashboard} 
-            label="Dashboard" 
-            active={activeTab === 'dashboard'} 
-            onClick={() => setActiveTab('dashboard')} 
-          />
-          {profile?.role === 'manager' && (
-            <SidebarItem 
-              icon={BarChart3} 
-              label="Global Overview" 
-              active={activeTab === 'global'} 
-              onClick={() => setActiveTab('global')} 
-            />
-          )}
-          <SidebarItem 
-            icon={ShoppingCart} 
-            label="Point of Sale" 
-            active={activeTab === 'pos'} 
-            onClick={() => setActiveTab('pos')} 
-          />
-          <SidebarItem 
-            icon={Package} 
-            label="Inventory" 
-            active={activeTab === 'inventory'} 
-            onClick={() => setActiveTab('inventory')} 
-          />
-          <SidebarItem 
-            icon={AlertTriangle} 
-            label="Inventory Health" 
-            active={activeTab === 'alerts'} 
-            onClick={() => setActiveTab('alerts')} 
-          />
-          {['manager', 'supervisor', 'inventory'].includes(profile?.role || '') && (
-            <SidebarItem 
-              icon={BookOpen} 
-              label="Product Catalog" 
-              active={activeTab === 'catalog'} 
-              onClick={() => setActiveTab('catalog')} 
-            />
-          )}
-          {['manager', 'supervisor', 'inventory', 'warehouse'].includes(profile?.role || '') && (
-            <SidebarItem 
-              icon={ArrowRightLeft} 
-              label="Stock Transfers" 
-              active={activeTab === 'transfers'} 
-              onClick={() => setActiveTab('transfers')} 
-            />
-          )}
-          {profile?.role === 'manager' && (
-            <SidebarItem 
-              icon={Store} 
-              label="Branches" 
-              active={activeTab === 'branches'} 
-              onClick={() => setActiveTab('branches')} 
-            />
-          )}
-          {profile?.role === 'manager' && (
-            <SidebarItem 
-              icon={Zap} 
-              label="Subscription" 
-              active={activeTab === 'subscription'} 
-              onClick={() => setActiveTab('subscription')} 
-            />
-          )}
-          {['manager', 'supervisor', 'accountant'].includes(profile?.role || '') && (
-            <SidebarItem 
-              icon={Calendar} 
-              label="Shifts" 
-              active={activeTab === 'shifts'} 
-              onClick={() => setActiveTab('shifts')} 
-            />
-          )}
-          {['manager', 'supervisor', 'accountant'].includes(profile?.role || '') && (
-            <SidebarItem 
-              icon={BarChart3} 
-              label="Reports" 
-              active={activeTab === 'reports'} 
-              onClick={() => setActiveTab('reports')} 
-            />
-          )}
-          {['manager', 'supervisor', 'accountant', 'clerk'].includes(profile?.role || '') && (
-            <SidebarItem 
-              icon={Archive} 
-              label="Sales Archive" 
-              active={activeTab === 'sales-history'} 
-              onClick={() => setActiveTab('sales-history')} 
-            />
-          )}
-          {profile?.role === 'manager' && (
-            <SidebarItem 
-              icon={BookOpen} 
-              label="Customers" 
-              active={activeTab === 'customers'} 
-              onClick={() => setActiveTab('customers')} 
-            />
-          )}
-          {profile?.role === 'manager' && (
-            <SidebarItem 
-              icon={Users} 
-              label="Staff" 
-              active={activeTab === 'staff'} 
-              onClick={() => setActiveTab('staff')} 
-            />
-          )}
-          <SidebarItem 
-            icon={Settings} 
-            label="Settings" 
-            active={activeTab === 'settings'} 
-            onClick={() => setActiveTab('settings')} 
-          />
-
-          {user.email === 'jamesgambrah@gmail.com' && (
-            <div className="pt-4 mt-4 border-t border-slate-100">
-              <p className="px-4 mb-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Admin Only</p>
-              <SidebarItem 
-                icon={ShieldCheck} 
-                label="CEO Centre" 
-                active={activeTab === 'ceo'} 
-                onClick={() => setActiveTab('ceo')} 
-              />
-            </div>
-          )}
-        </nav>
-
-        <div className="pt-6 border-t border-slate-100">
-          <div className="flex items-center gap-3 mb-4 px-2">
-            <div className="w-10 h-10 rounded-full bg-slate-200 overflow-hidden">
-              <img src={user.photoURL || ''} alt="" referrerPolicy="no-referrer" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold text-slate-800 truncate">{user.displayName}</p>
-              <p className="text-xs text-slate-500 capitalize">{profile?.role}</p>
-            </div>
-          </div>
-          <button 
-            onClick={handleLogout}
-            className="flex items-center gap-3 w-full px-4 py-3 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+      {/* Sidebar - Desktop & Mobile */}
+      <AnimatePresence>
+        {(isSidebarOpen || (typeof window !== 'undefined' && window.innerWidth >= 1024)) && (
+          <motion.aside 
+            initial={typeof window !== 'undefined' && window.innerWidth < 1024 ? { x: -300 } : false}
+            animate={{ x: 0 }}
+            exit={{ x: -300 }}
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            className={cn(
+              "fixed lg:relative z-[70] w-72 h-full bg-white border-r border-slate-100 p-6 flex flex-col gap-8 shadow-2xl lg:shadow-none",
+              !isSidebarOpen && "hidden lg:flex"
+            )}
           >
-            <LogOut size={20} />
-            <span className="font-medium">Logout</span>
-          </button>
-        </div>
-      </aside>
+            <div className="flex items-center justify-between lg:justify-start gap-3 px-2">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-orange-500 text-white rounded-lg">
+                  <Store size={24} />
+                </div>
+                <span className="text-xl font-black text-slate-800 tracking-tight">GAM SHOP</span>
+              </div>
+              <button 
+                onClick={() => setIsSidebarOpen(false)}
+                className="lg:hidden p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <nav className="flex-1 space-y-2 overflow-y-auto pr-2 custom-scrollbar">
+              <SidebarItem 
+                icon={LayoutDashboard} 
+                label="Dashboard" 
+                active={activeTab === 'dashboard'} 
+                onClick={() => { setActiveTab('dashboard'); setIsSidebarOpen(false); }} 
+              />
+              {profile?.role === 'manager' && (
+                <SidebarItem 
+                  icon={BarChart3} 
+                  label="Global Overview" 
+                  active={activeTab === 'global'} 
+                  onClick={() => { setActiveTab('global'); setIsSidebarOpen(false); }} 
+                />
+              )}
+              <SidebarItem 
+                icon={ShoppingCart} 
+                label="Point of Sale" 
+                active={activeTab === 'pos'} 
+                onClick={() => { setActiveTab('pos'); setIsSidebarOpen(false); }} 
+              />
+              <SidebarItem 
+                icon={Package} 
+                label="Inventory" 
+                active={activeTab === 'inventory'} 
+                onClick={() => { setActiveTab('inventory'); setIsSidebarOpen(false); }} 
+              />
+              <SidebarItem 
+                icon={AlertTriangle} 
+                label="Inventory Health" 
+                active={activeTab === 'alerts'} 
+                onClick={() => { setActiveTab('alerts'); setIsSidebarOpen(false); }} 
+              />
+              {['manager', 'supervisor', 'inventory'].includes(profile?.role || '') && (
+                <SidebarItem 
+                  icon={BookOpen} 
+                  label="Product Catalog" 
+                  active={activeTab === 'catalog'} 
+                  onClick={() => { setActiveTab('catalog'); setIsSidebarOpen(false); }} 
+                />
+              )}
+              {['manager', 'supervisor', 'inventory', 'warehouse'].includes(profile?.role || '') && (
+                <SidebarItem 
+                  icon={ArrowRightLeft} 
+                  label="Stock Transfers" 
+                  active={activeTab === 'transfers'} 
+                  onClick={() => { setActiveTab('transfers'); setIsSidebarOpen(false); }} 
+                />
+              )}
+              {profile?.role === 'manager' && (
+                <SidebarItem 
+                  icon={Store} 
+                  label="Branches" 
+                  active={activeTab === 'branches'} 
+                  onClick={() => { setActiveTab('branches'); setIsSidebarOpen(false); }} 
+                />
+              )}
+              {profile?.role === 'manager' && (
+                <SidebarItem 
+                  icon={Zap} 
+                  label="Subscription" 
+                  active={activeTab === 'subscription'} 
+                  onClick={() => { setActiveTab('subscription'); setIsSidebarOpen(false); }} 
+                />
+              )}
+              {['manager', 'supervisor', 'accountant'].includes(profile?.role || '') && (
+                <SidebarItem 
+                  icon={Calendar} 
+                  label="Shifts" 
+                  active={activeTab === 'shifts'} 
+                  onClick={() => { setActiveTab('shifts'); setIsSidebarOpen(false); }} 
+                />
+              )}
+              {['manager', 'supervisor', 'accountant'].includes(profile?.role || '') && (
+                <SidebarItem 
+                  icon={BarChart3} 
+                  label="Reports" 
+                  active={activeTab === 'reports'} 
+                  onClick={() => { setActiveTab('reports'); setIsSidebarOpen(false); }} 
+                />
+              )}
+              {['manager', 'supervisor', 'accountant', 'clerk'].includes(profile?.role || '') && (
+                <SidebarItem 
+                  icon={Archive} 
+                  label="Sales Archive" 
+                  active={activeTab === 'sales-history'} 
+                  onClick={() => { setActiveTab('sales-history'); setIsSidebarOpen(false); }} 
+                />
+              )}
+              {profile?.role === 'manager' && (
+                <SidebarItem 
+                  icon={BookOpen} 
+                  label="Customers" 
+                  active={activeTab === 'customers'} 
+                  onClick={() => { setActiveTab('customers'); setIsSidebarOpen(false); }} 
+                />
+              )}
+              {profile?.role === 'manager' && (
+                <SidebarItem 
+                  icon={Users} 
+                  label="Staff" 
+                  active={activeTab === 'staff'} 
+                  onClick={() => { setActiveTab('staff'); setIsSidebarOpen(false); }} 
+                />
+              )}
+              <SidebarItem 
+                icon={Settings} 
+                label="Settings" 
+                active={activeTab === 'settings'} 
+                onClick={() => { setActiveTab('settings'); setIsSidebarOpen(false); }} 
+              />
+
+              {user.email === 'jamesgambrah@gmail.com' && (
+                <div className="pt-4 mt-4 border-t border-slate-100">
+                  <p className="px-4 mb-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Admin Only</p>
+                  <SidebarItem 
+                    icon={ShieldCheck} 
+                    label="CEO Centre" 
+                    active={activeTab === 'ceo'} 
+                    onClick={() => { setActiveTab('ceo'); setIsSidebarOpen(false); }} 
+                  />
+                </div>
+              )}
+            </nav>
+
+            <div className="pt-6 border-t border-slate-100">
+              <div className="flex items-center gap-3 mb-4 px-2">
+                <div className="w-10 h-10 rounded-full bg-slate-200 overflow-hidden">
+                  <img src={user.photoURL || ''} alt="" referrerPolicy="no-referrer" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-slate-800 truncate">{user.displayName}</p>
+                  <p className="text-xs text-slate-500 capitalize">{profile?.role}</p>
+                </div>
+              </div>
+              <button 
+                onClick={handleLogout}
+                className="flex items-center gap-3 w-full px-4 py-3 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+              >
+                <LogOut size={20} />
+                <span className="font-medium">Logout</span>
+              </button>
+            </div>
+          </motion.aside>
+        )}
+      </AnimatePresence>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-20 bg-white border-b border-slate-100 px-8 flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-slate-800 capitalize">{activeTab}</h2>
-            <p className="text-sm text-slate-500">Welcome back, {user.displayName}</p>
+      <main className="flex-1 flex flex-col overflow-hidden relative">
+        <header className="h-20 bg-white border-b border-slate-100 px-4 lg:px-8 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <button 
+              onClick={() => setIsSidebarOpen(true)}
+              className="lg:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-lg"
+            >
+              <Menu size={24} />
+            </button>
+            <div>
+              <h2 className="text-lg lg:text-xl font-bold text-slate-800 capitalize">{activeTab}</h2>
+              <p className="hidden md:block text-sm text-slate-500">Welcome back, {user.displayName}</p>
+            </div>
           </div>
           
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 lg:gap-4">
             {!isOnline && (
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg border border-red-100 animate-pulse">
+              <div className="flex items-center gap-2 px-2 lg:px-3 py-1.5 bg-red-50 text-red-600 rounded-lg border border-red-100 animate-pulse">
                 <WifiOff size={14} />
-                <span className="text-[10px] font-black uppercase tracking-wider">Offline Mode</span>
+                <span className="hidden sm:inline text-[10px] font-black uppercase tracking-wider">Offline</span>
               </div>
             )}
             {!currentShift ? (
-              <Button variant="outline" onClick={openShift} className="border-orange-200 text-orange-600 hover:bg-orange-50">
+              <Button variant="outline" onClick={openShift} className="border-orange-200 text-orange-600 hover:bg-orange-50 text-xs lg:text-sm px-3 lg:px-4">
                 Open Shift
               </Button>
             ) : (
-              <div className="flex items-center gap-3 px-4 py-2 bg-orange-50 text-orange-700 rounded-lg border border-orange-100">
+              <div className="flex items-center gap-2 lg:gap-3 px-3 lg:px-4 py-2 bg-orange-50 text-orange-700 rounded-lg border border-orange-100">
                 <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
-                <span className="text-sm font-bold">Shift Active</span>
+                <span className="text-xs lg:text-sm font-bold">Shift Active</span>
               </div>
             )}
             <div 
@@ -7538,7 +8224,7 @@ function App() {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-8">
+        <div className="flex-1 overflow-y-auto p-4 lg:p-8">
           <AnimatePresence>
             {lastSale && (
               <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
