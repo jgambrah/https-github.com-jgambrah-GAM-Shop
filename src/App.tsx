@@ -6037,23 +6037,32 @@ function App() {
   useEffect(() => {
     testConnection();
     const unsub = onAuthStateChanged(auth, async (u) => {
+      console.log("Auth state changed:", u ? `User logged in: ${u.uid}` : "User logged out");
       try {
         setUser(u);
         if (u) {
           const userDocRef = doc(db, 'users', u.uid);
+          console.log("Fetching user profile for:", u.uid);
           const userDocSnap = await getDoc(userDocRef).catch(err => handleFirestoreError(err, OperationType.GET, `users/${u.uid}`));
           
           if (userDocSnap && userDocSnap.exists()) {
             const userData = userDocSnap.data() as User;
+            console.log("User profile found:", userData);
             setProfile(userData);
             
             // Fetch Business Unit
             const buDocRef = doc(db, 'businessUnits', userData.businessUnitId);
+            console.log("Fetching business unit:", userData.businessUnitId);
             const buDocSnap = await getDoc(buDocRef).catch(err => handleFirestoreError(err, OperationType.GET, `businessUnits/${userData.businessUnitId}`));
             if (buDocSnap && buDocSnap.exists()) {
-              setBusinessUnit({ id: buDocSnap.id, ...buDocSnap.data() } as BusinessUnit);
+              const buData = { id: buDocSnap.id, ...buDocSnap.data() } as BusinessUnit;
+              console.log("Business unit found:", buData);
+              setBusinessUnit(buData);
+            } else {
+              console.warn("Business unit not found for user:", userData.businessUnitId);
             }
           } else {
+            console.log("No user profile found, starting onboarding for:", u.uid);
             // Create new Business Unit for the first-time user (SaaS onboarding)
             const newBuId = `bu_${u.uid.slice(0, 8)}_${Date.now().toString().slice(-4)}`;
             const trialEnds = new Date();
@@ -6068,10 +6077,12 @@ function App() {
               subscriptionStatus: 'trialing'
             };
             
+            console.log("Creating new business unit:", newBuId);
             await setDoc(doc(db, 'businessUnits', newBuId), newBu).catch(err => handleFirestoreError(err, OperationType.WRITE, `businessUnits/${newBuId}`));
             setBusinessUnit(newBu);
 
             // Create Default Branch
+            console.log("Creating default branch...");
             const branchRef = await addDoc(collection(db, 'branches'), {
               name: 'Main Branch',
               businessUnitId: newBuId,
@@ -6089,8 +6100,10 @@ function App() {
               branchId: branchRef ? branchRef.id : 'main',
               createdAt: new Date().toISOString()
             };
+            console.log("Creating user profile:", newProfile);
             await setDoc(userDocRef, newProfile).catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${u.uid}`));
             setProfile(newProfile);
+            console.log("Onboarding complete for:", u.uid);
           }
         } else {
           setProfile(null);
@@ -6317,10 +6330,21 @@ function App() {
   const handleLogin = async () => {
     try {
       const provider = new GoogleAuthProvider();
+      // Add custom parameters to force account selection if needed
+      provider.setCustomParameters({ prompt: 'select_account' });
+      
       await signInWithPopup(auth, provider);
       toast.success('Welcome back!');
-    } catch (err) {
-      toast.error('Login failed');
+    } catch (err: any) {
+      console.error('Login error:', err);
+      if (err.code === 'auth/popup-blocked') {
+        toast.error('Sign-in popup was blocked by your browser. Please allow popups for this site.');
+      } else if (err.code === 'auth/cancelled-popup-request') {
+        // User closed the popup, no need for a loud error
+        console.log('User cancelled sign-in');
+      } else {
+        toast.error(`Login failed: ${err.message || 'Unknown error'}`);
+      }
     }
   };
 
