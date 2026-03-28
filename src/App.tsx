@@ -6974,8 +6974,6 @@ function App() {
   const handleLogin = async () => {
     try {
       const provider = new GoogleAuthProvider();
-      // Add custom parameters to force account selection if needed
-      provider.setCustomParameters({ prompt: 'select_account' });
       
       await signInWithPopup(auth, provider);
       toast.success('Welcome back!');
